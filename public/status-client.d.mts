@@ -13,6 +13,7 @@ export interface SnapshotRequestOptions {
 }
 
 export interface SnapshotMonitor {
+  generatedAt?: string | null;
   monitor?: { intervalSeconds?: number };
 }
 
@@ -29,6 +30,7 @@ export interface StatusControllerOptions<Snapshot extends SnapshotMonitor, View,
   clearTimer?(timer: TimerId): void;
   getHidden?(): boolean;
   dataUrl?: string;
+  dataUrls?: string[];
 }
 
 export interface StatusController {
@@ -45,6 +47,7 @@ export interface StatusModel {
 }
 
 export function resolveStatusDataUrl(document: Pick<Document, 'querySelector'>): string;
+export function resolveStatusDataUrls(document: Pick<Document, 'querySelector'>): string[];
 export function renderStatusView(document: Document, view: StatusView): void;
 export function createStatusController<Snapshot extends SnapshotMonitor = StatusSnapshot, View = StatusView, TimerId = ReturnType<typeof setTimeout>>(
   options: StatusControllerOptions<Snapshot, View, TimerId>,

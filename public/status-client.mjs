@@ -1,6 +1,7 @@
 const STATES = new Set(['operational', 'degraded', 'outage', 'unknown']);
 const COMPONENT_NAMES = Object.freeze({ website: 'Website', api: 'Public API', database: 'Database', cache: 'Cache' });
 const FALLBACK_DATA_URL = 'https://raw.githubusercontent.com/Lumichandesu/yomumi-status/main/public/status.json';
+const SCHEDULED_DATA_URL = 'https://yomumi-status-monitor.yomumi.workers.dev/status.json';
 const DEFAULT_INTERVAL_MS = 900_000;
 const REQUEST_TIMEOUT_MS = 6_000;
 
@@ -31,6 +32,10 @@ export function resolveStatusDataUrl(document) {
   const configured = document.querySelector('meta[name="status-data-url"]')?.content?.trim();
   // The fallback reads only the primary public status snapshot; never arbitrary URLs or the app API.
   return configured === FALLBACK_DATA_URL ? FALLBACK_DATA_URL : './status.json';
+}
+
+export function resolveStatusDataUrls(document) {
+  return [resolveStatusDataUrl(document), SCHEDULED_DATA_URL];
 }
 
 export function renderStatusView(document, view) {
@@ -136,7 +141,7 @@ export function createStatusController(options) {
     fetchSnapshot, validateSnapshot, buildView, renderView,
     setFeedback = () => {}, setBusy = () => {}, setIntervalLabel = () => {},
     now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout,
-    getHidden = () => false, dataUrl = './status.json',
+    getHidden = () => false, dataUrl = './status.json', dataUrls = [dataUrl],
   } = options;
   let snapshot = null;
   let updateFailed = false;
@@ -179,18 +184,36 @@ export function createStatusController(options) {
     let timeout;
     let cancelled = false;
     const request = new Promise((resolve, reject) => {
+      const candidates = [];
+      const urls = [...new Set(dataUrls)].filter((url) => ['./status.json', FALLBACK_DATA_URL, SCHEDULED_DATA_URL].includes(url));
+      let remaining = urls.length;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        requestAbortController.abort();
+        const newest = candidates.sort((left, right) => (Date.parse(right.generatedAt) || 0) - (Date.parse(left.generatedAt) || 0))[0];
+        if (newest) resolve(newest);
+        else reject(new Error('No valid status snapshot'));
+      };
       cancelRequest = () => { cancelled = true; requestAbortController.abort(); reject(new Error('Request paused')); };
-      timeout = setTimer(() => { requestAbortController.abort(); reject(new Error('Status request timed out')); }, REQUEST_TIMEOUT_MS);
-      Promise.resolve().then(() => fetchSnapshot(dataUrl, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: requestAbortController.signal }))
-        .then(async (response) => {
-          if (!response.ok) throw new Error('Status snapshot unavailable');
-          const validated = validateSnapshot(await response.json());
-          if (!validated || typeof validated !== 'object') throw new Error('Invalid status snapshot');
-          resolve(validated);
-        }, reject).catch(reject);
+      timeout = setTimer(finish, REQUEST_TIMEOUT_MS);
+      if (!remaining) finish();
+      for (const url of urls) {
+        Promise.resolve().then(() => fetchSnapshot(url, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: requestAbortController.signal }))
+          .then(async (response) => {
+            if (!response.ok) throw new Error('Status snapshot unavailable');
+            const validated = validateSnapshot(await response.json());
+            if (!validated || typeof validated !== 'object') throw new Error('Invalid status snapshot');
+            const at = Date.parse(validated.generatedAt);
+            if (validated.generatedAt !== null && (!Number.isFinite(at) || at > now() + 60_000)) throw new Error('Invalid observation time');
+            if (!settled && !cancelled) candidates.push(validated);
+          }).catch(() => {}).finally(() => { remaining -= 1; if (!remaining) finish(); });
+      }
     });
     inFlight = request.then((validated) => {
       if (destroyed || cancelled) return false;
+      if (snapshot?.generatedAt && (!validated.generatedAt || Date.parse(validated.generatedAt) < Date.parse(snapshot.generatedAt))) throw new Error('Older status snapshot');
       snapshot = validated;
       updateFailed = false;
       const seconds = snapshot.monitor?.intervalSeconds;
@@ -260,7 +283,7 @@ export function mountStatusPage(window, document, model) {
       observationNote.textContent = `Checks every ${interval}. Percentages use recorded checks, not continuous uptime. Gray marks unknown or missing observations.`;
     },
     getHidden: () => document.hidden,
-    dataUrl: resolveStatusDataUrl(document),
+    dataUrls: resolveStatusDataUrls(document),
     setTimer: window.setTimeout.bind(window),
     clearTimer: window.clearTimeout.bind(window),
   });
