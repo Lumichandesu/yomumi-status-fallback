@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="description" content="Observed availability and incident history for Yomumi's website, public API, database and cache.">
+    <meta name="referrer" content="no-referrer">
+    <meta name="status-data-url" content="./status.json">
+    <title>Yomumi Status</title>
+    <link rel="stylesheet" href="./status.css">
+    <script type="module" src="./status-client.mjs"></script>
+  </head>
+  <body>
+    <div class="status-page" id="status-page">
+      <header class="page-header">
+        <p class="brand" aria-label="Yomumi">yomumi<span aria-hidden="true">.</span></p>
+        <span class="header-label">System status</span>
+      </header>
+
+      <main>
+        <div class="heading-row">
+          <div>
+            <h1>System status</h1>
+            <p class="page-description">Availability, as observed by our independent monitor.</p>
+          </div>
+          <button class="refresh-button" id="refresh-status" type="button">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.5-2.1L20 9M4 15l2.4 3.1A7 7 0 0 0 17.9 16"/></svg>
+            <span>Refresh status</span>
+          </button>
+        </div>
+
+        <section class="availability-banner status-unknown" id="availability-banner" aria-labelledby="overall-label">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div>
+            <h2 id="overall-label">Status unknown</h2>
+            <p id="overall-description">Waiting for a current monitor observation.</p>
+          </div>
+        </section>
+
+        <div class="snapshot-meta">
+          <p>Last updated <time id="last-updated">Not available</time></p>
+          <p id="refresh-feedback" role="status" aria-live="polite">Waiting for status data.</p>
+        </div>
+
+        <section class="components-section" aria-labelledby="components-heading">
+          <div class="section-heading">
+            <h2 id="components-heading">Services</h2>
+            <span>Past 90 days</span>
+          </div>
+          <div id="component-list" class="component-list">
+            <article class="component-row status-unknown"><div class="component-heading"><h3>Website</h3><span class="component-status"><span class="status-dot" aria-hidden="true"></span>Status unknown</span></div><div class="day-bars empty-history" aria-hidden="true"></div><div class="history-caption"><span>No observations yet</span><span>Availability not available</span></div></article>
+            <article class="component-row status-unknown"><div class="component-heading"><h3>Public API</h3><span class="component-status"><span class="status-dot" aria-hidden="true"></span>Status unknown</span></div><div class="day-bars empty-history" aria-hidden="true"></div><div class="history-caption"><span>No observations yet</span><span>Availability not available</span></div></article>
+            <article class="component-row status-unknown"><div class="component-heading"><h3>Database</h3><span class="component-status"><span class="status-dot" aria-hidden="true"></span>Status unknown</span></div><div class="day-bars empty-history" aria-hidden="true"></div><div class="history-caption"><span>No observations yet</span><span>Availability not available</span></div></article>
+            <article class="component-row status-unknown"><div class="component-heading"><h3>Cache</h3><span class="component-status"><span class="status-dot" aria-hidden="true"></span>Status unknown</span></div><div class="day-bars empty-history" aria-hidden="true"></div><div class="history-caption"><span>No observations yet</span><span>Availability not available</span></div></article>
+          </div>
+          <div class="history-legend" aria-label="History status legend">
+            <span class="status-operational"><i aria-hidden="true"></i>Operational</span>
+            <span class="status-degraded"><i aria-hidden="true"></i>Degraded</span>
+            <span class="status-outage"><i aria-hidden="true"></i>Outage</span>
+            <span class="status-unknown"><i aria-hidden="true"></i>Unknown / no data</span>
+          </div>
+          <p class="observation-note" id="observation-note">Percentages use recorded checks, not continuous uptime. Gray marks unknown or missing observations.</p>
+          <p class="monitor-note" id="monitor-note">Monitor start time is not available yet.</p>
+        </section>
+
+        <section class="incidents-section" aria-labelledby="incidents-heading">
+          <div class="section-heading"><h2 id="incidents-heading">Incident history</h2><span>Automatic reports</span></div>
+          <div id="incident-list"><p class="empty-incidents">No incident data available yet.</p></div>
+        </section>
+
+        <noscript><p class="noscript-note">JavaScript is needed to load the monitor snapshot. Status remains unknown until a current observation is available.</p></noscript>
+      </main>
+    </div>
+  </body>
+</html>
