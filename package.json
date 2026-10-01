@@ -1,1 +1,13 @@
-{"name":"yomumi-status-fallback","private":true,"type":"module","engines":{"node":">=22"}}
+{
+  "name": "yomumi-status",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "monitor": "node scripts/monitor.mjs",
+    "build": "bun --no-env-file run scripts/build.mjs",
+    "serve": "bun --no-env-file run src/server.ts",
+    "test": "node --test tests/*.test.mjs && bun --no-env-file test tests/server.test.ts"
+  },
+  "engines": { "node": ">=22", "bun": ">=1.4.2" },
+  "dependencies": { "elysia": "1.4.30" }
+}

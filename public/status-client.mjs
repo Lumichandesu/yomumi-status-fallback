@@ -184,46 +184,50 @@ export function createStatusController(options) {
     let timeout;
     let cancelled = false;
     const request = new Promise((resolve, reject) => {
-      const candidates = [];
       const urls = [...new Set(dataUrls)].filter((url) => ['./status.json', FALLBACK_DATA_URL, SCHEDULED_DATA_URL].includes(url));
       let remaining = urls.length;
       let settled = false;
+      let accepted = false;
       const finish = () => {
         if (settled) return;
         settled = true;
         requestAbortController.abort();
-        const newest = candidates.sort((left, right) => (Date.parse(right.generatedAt) || 0) - (Date.parse(left.generatedAt) || 0))[0];
-        if (newest) resolve(newest);
+        if (accepted) resolve(true);
         else reject(new Error('No valid status snapshot'));
       };
-      cancelRequest = () => { cancelled = true; requestAbortController.abort(); reject(new Error('Request paused')); };
+      cancelRequest = () => { cancelled = true; settled = true; requestAbortController.abort(); reject(new Error('Request paused')); };
       timeout = setTimer(finish, REQUEST_TIMEOUT_MS);
       if (!remaining) finish();
       for (const url of urls) {
         Promise.resolve().then(() => fetchSnapshot(url, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: requestAbortController.signal }))
           .then(async (response) => {
+            if (settled || cancelled || destroyed || paused || getHidden()) return;
             if (!response.ok) throw new Error('Status snapshot unavailable');
             const validated = validateSnapshot(await response.json());
             if (!validated || typeof validated !== 'object') throw new Error('Invalid status snapshot');
             const at = Date.parse(validated.generatedAt);
             if (validated.generatedAt !== null && (!Number.isFinite(at) || at > now() + 60_000)) throw new Error('Invalid observation time');
-            if (!settled && !cancelled) candidates.push(validated);
+            if (settled || cancelled || destroyed || paused || getHidden()) return;
+            const previousAt = Date.parse(snapshot?.generatedAt);
+            if (Number.isFinite(previousAt) && (!Number.isFinite(at) || at < previousAt)) return;
+            // Paint the first usable source immediately; a slower source may only advance it.
+            if (accepted && at === previousAt) return;
+            snapshot = validated;
+            accepted = true;
+            updateFailed = false;
+            const seconds = snapshot.monitor?.intervalSeconds;
+            intervalMs = Number.isFinite(seconds) && seconds >= 60 ? seconds * 1_000 : DEFAULT_INTERVAL_MS;
+            setIntervalLabel(seconds >= 60 ? seconds : DEFAULT_INTERVAL_MS / 1_000);
+            render();
+            setFeedback('Status refreshed.');
           }).catch(() => {}).finally(() => { remaining -= 1; if (!remaining) finish(); });
       }
     });
-    inFlight = request.then((validated) => {
-      if (destroyed || cancelled) return false;
-      if (snapshot?.generatedAt && (!validated.generatedAt || Date.parse(validated.generatedAt) < Date.parse(snapshot.generatedAt))) throw new Error('Older status snapshot');
-      snapshot = validated;
-      updateFailed = false;
-      const seconds = snapshot.monitor?.intervalSeconds;
-      intervalMs = Number.isFinite(seconds) && seconds >= 60 ? seconds * 1_000 : DEFAULT_INTERVAL_MS;
-      setIntervalLabel(seconds >= 60 ? seconds : DEFAULT_INTERVAL_MS / 1_000);
-      render();
-      setFeedback('Status refreshed.');
-      return true;
+    inFlight = request.then((updated) => {
+      if (destroyed || cancelled || paused || getHidden()) return false;
+      return updated;
     }).catch(() => {
-      if (destroyed || cancelled) return false;
+      if (destroyed || cancelled || paused || getHidden()) return false;
       updateFailed = true;
       render();
       setFeedback(snapshot ? 'Unable to refresh. Showing the last available observation.' : 'Unable to load status. No current observation is available.');
