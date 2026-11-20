@@ -87,10 +87,17 @@ export function buildView(snapshot, now = Date.now(), updateFailed = false) {
     });
     const passed = days.reduce((n, d) => n + d.passed, 0);
     const observedChecks = passed + days.reduce((n, d) => n + d.failed, 0);
-    return { id, name: COMPONENTS[id], status, state: status, statusLabel: labels[status], checkedAt: c?.checkedAt ?? null, latencyMs: stale || componentStale ? null : c?.latencyMs ?? null, reason: stale ? 'No current monitor observation.' : componentStale ? 'No current component observation.' : c.reason, days, observedChecks, availabilityPercent: observedChecks ? passed / observedChecks * 100 : null };
+    const unverifiedChecks = days.reduce((n, d) => n + d.unknown, 0);
+    return { id, name: COMPONENTS[id], status, state: status, statusLabel: labels[status], checkedAt: c?.checkedAt ?? null, latencyMs: stale || componentStale ? null : c?.latencyMs ?? null, reason: stale ? 'No current monitor observation.' : componentStale ? 'No current component observation.' : c.reason, days, observedChecks, unverifiedChecks, availabilityPercent: observedChecks ? passed / observedChecks * 100 : null };
   });
   const overall = worstStatus(components.map((c) => c.status));
-  const statusLabel = overall === 'operational' ? 'All monitored services operational' : overall === 'outage' ? 'Some services unavailable' : overall === 'degraded' ? 'Some services degraded' : 'Status unknown';
-  const description = stale ? (parsed ? 'Monitoring data is not current. Current availability is unknown.' : 'Waiting for the first independent monitor observation.') : updateFailed ? 'Showing the last recorded observation; the latest refresh could not be retrieved.' : overall === 'operational' ? 'The most recent recorded checks passed.' : overall === 'unknown' ? 'One or more services could not be verified by the latest checks.' : 'The monitor observed a service failure. See individual services below.';
-  return { overall, statusLabel, description, updatedAt: parsed?.generatedAt ?? null, startedAt: parsed?.monitor.startedAt ?? null, components, incidents: parsed?.incidents ?? [] };
+  const unverified = components.filter(c => c.status === 'unknown');
+  const partial = overall === 'unknown' && unverified.length < components.length;
+  const statusLabel = partial ? `${components.length - unverified.length} of ${components.length} services operational`
+    : overall === 'operational' ? 'All monitored services operational' : overall === 'outage' ? 'Some services unavailable' : overall === 'degraded' ? 'Some services degraded' : 'Status unknown';
+  const description = stale ? (parsed ? 'Monitoring data is not current. Current availability is unknown.' : 'Waiting for the first independent monitor observation.')
+    : updateFailed ? 'Showing the last recorded observation; the latest refresh could not be retrieved.'
+    : partial ? `The monitor could not verify ${new Intl.ListFormat('en').format(unverified.map(c => c.name))}.`
+    : overall === 'operational' ? 'The most recent recorded checks passed.' : overall === 'unknown' ? 'The monitor could not verify any service in the latest checks.' : 'The monitor observed a service failure. See individual services below.';
+  return { overall, statusLabel, description, updatedAt: parsed?.generatedAt ?? null, ageMinutes: parsed && age >= -60_000 ? Math.max(0, Math.floor(age / 60_000)) : null, startedAt: parsed?.monitor.startedAt ?? null, components, incidents: parsed?.incidents ?? [] };
 }

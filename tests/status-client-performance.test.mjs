@@ -262,6 +262,7 @@ test('stale snapshots render promptly but retain the existing unknown semantics'
   assert.equal(f.views.length, 1);
   assert.equal(f.views[0].overall, 'unknown');
   assert.match(f.views[0].description, /not current/);
+  assert.equal(f.feedback.at(-1), 'Waiting for a current observation.');
   f.requests[1].reject(new Error('Unavailable'));
   assert.equal(await refreshing, true);
 });

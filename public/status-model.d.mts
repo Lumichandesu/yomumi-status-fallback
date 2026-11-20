@@ -55,6 +55,7 @@ export interface ComponentView extends CurrentComponent {
   statusLabel: string;
   days: ComponentDay[];
   observedChecks: number;
+  unverifiedChecks: number;
   availabilityPercent: number | null;
 }
 
@@ -63,6 +64,7 @@ export interface StatusView {
   statusLabel: string;
   description: string;
   updatedAt: string | null;
+  ageMinutes: number | null;
   startedAt: string | null;
   components: ComponentView[];
   incidents: StatusIncident[];
