@@ -14,7 +14,7 @@ export interface SnapshotRequestOptions {
 
 export interface SnapshotMonitor {
   generatedAt?: string | null;
-  monitor?: { intervalSeconds?: number };
+  monitor?: { intervalSeconds?: number; staleAfterSeconds?: number };
 }
 
 export interface StatusControllerOptions<Snapshot extends SnapshotMonitor, View, TimerId> {

@@ -360,6 +360,7 @@ test('availability is the observed passing-check percentage, excludes unknown, a
   assert.equal(website.status, 'operational');
   assert.equal(website.availabilityPercent, 75);
   assert.equal(website.observedChecks, 4);
+  assert.equal(website.unverifiedChecks, 1);
   assert.deepEqual(website.days.at(-1), { date: '2026-09-30', status: 'degraded', checks: 5, passed: 3, failed: 1, unknown: 1 });
 });
 
@@ -409,11 +410,16 @@ test('stale component and stale or future snapshots become unknown without erasi
   const snapshot = recordObservation(null, observe());
   snapshot.components.find((component) => component.id === 'database').checkedAt = stamp(NOW - 2700001);
   const partial = buildView(snapshot, NOW);
+  assert.equal(partial.statusLabel, '3 of 4 services operational');
+  assert.match(partial.description, /could not verify Database/i);
+  assert.equal(partial.ageMinutes, 0);
   assert.equal(partial.overall, 'unknown');
   assert.equal(row(partial, 'database').status, 'unknown');
   assert.equal(row(partial, 'database').latencyMs, null);
   assert.equal(row(partial, 'api').status, 'operational');
   const stale = buildView(snapshot, NOW + 2700001);
+  assert.equal(stale.statusLabel, 'Status unknown');
+  assert.equal(stale.ageMinutes, 45);
   assert.ok(stale.components.every((component) => component.status === 'unknown' && component.latencyMs === null));
   assert.equal(row(stale, 'website').availabilityPercent, 100);
   assert.equal(row(stale, 'website').observedChecks, 1);

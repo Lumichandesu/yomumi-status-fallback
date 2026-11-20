@@ -9,6 +9,13 @@ const stateClass = (state) => `status-${STATES.has(state) ? state : 'unknown'}`;
 const pluralChecks = (count) => `${count.toLocaleString('en-US')} ${count === 1 ? 'check' : 'checks'}`;
 const pluralDays = (count) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
+function timeAgo(minutes) {
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} h ago`;
+  return `${pluralDays(Math.floor(minutes / 1440))} ago`;
+}
+
 function formatTime(value) {
   const date = new Date(value);
   if (!value || !Number.isFinite(date.getTime())) return 'Not available';
@@ -43,7 +50,9 @@ export function renderStatusView(document, view) {
   banner.className = `availability-banner ${stateClass(view.overall)}`;
   document.getElementById('overall-label').textContent = view.statusLabel;
   document.getElementById('overall-description').textContent = view.description;
-  setTime(document.getElementById('last-updated'), view.updatedAt);
+  const updated = document.getElementById('last-updated');
+  setTime(updated, view.updatedAt);
+  if (Number.isSafeInteger(view.ageMinutes)) updated.textContent += ` · ${timeAgo(view.ageMinutes)}`;
 
   const componentList = document.getElementById('component-list');
   const components = Array.isArray(view.components) ? view.components : [];
@@ -66,7 +75,8 @@ export function renderStatusView(document, view) {
     const observedChecks = Number.isSafeInteger(component.observedChecks) && component.observedChecks > 0 ? component.observedChecks : 0;
     const dayCounts = { operational: 0, degraded: 0, outage: 0, unknown: 90 - days.length };
     for (const day of days) dayCounts[day.checks > 0 && STATES.has(day.status) ? day.status : 'unknown'] += 1;
-    bars.setAttribute('aria-label', `${name}: 90-day history; ${pluralChecks(observedChecks)} recorded. Operational: ${pluralDays(dayCounts.operational)}; degraded: ${pluralDays(dayCounts.degraded)}; outage: ${pluralDays(dayCounts.outage)}; unknown or missing observations: ${pluralDays(dayCounts.unknown)}.`);
+    const unverifiedChecks = component.unverifiedChecks ?? 0;
+    bars.setAttribute('aria-label', `${name}, 90-day history. ${pluralChecks(observedChecks + unverifiedChecks)} recorded, ${observedChecks} verified and ${unverifiedChecks} unverified. Operational for ${pluralDays(dayCounts.operational)}, degraded for ${pluralDays(dayCounts.degraded)}, unavailable for ${pluralDays(dayCounts.outage)}, unknown or missing observations on ${pluralDays(dayCounts.unknown)}.`);
     for (const day of days) {
       const dayState = day.checks > 0 && STATES.has(day.status) ? day.status : 'unknown';
       const bar = element(document, 'span', `day-bar ${stateClass(dayState)}`);
@@ -85,8 +95,9 @@ export function renderStatusView(document, view) {
     const percent = component.availabilityPercent;
     if (observedChecks && typeof percent === 'number' && Number.isFinite(percent)) {
       const label = new Intl.NumberFormat('en', { maximumFractionDigits: 2, minimumFractionDigits: percent % 1 ? 2 : 0 }).format(percent);
-      availability.append(element(document, 'strong', null, `${label}% checks passed`), document.createTextNode(` · ${pluralChecks(observedChecks)}`));
-    } else availability.textContent = 'No usable observations';
+      availability.append(element(document, 'strong', null, `${label}% passed`), document.createTextNode(` · ${observedChecks.toLocaleString('en-US')} verified`));
+      if (unverifiedChecks) availability.append(document.createTextNode(` · ${unverifiedChecks.toLocaleString('en-US')} unverified`));
+    } else availability.textContent = unverifiedChecks ? `${pluralChecks(unverifiedChecks)} · All unverified` : 'No recorded checks';
     caption.append(range, availability);
     row.append(caption);
     return row;
@@ -219,7 +230,9 @@ export function createStatusController(options) {
             intervalMs = Number.isFinite(seconds) && seconds >= 60 ? seconds * 1_000 : DEFAULT_INTERVAL_MS;
             setIntervalLabel(seconds >= 60 ? seconds : DEFAULT_INTERVAL_MS / 1_000);
             render();
-            setFeedback('Status refreshed.');
+            const staleAfter = snapshot.monitor?.staleAfterSeconds;
+            setFeedback(!Number.isFinite(at) || (Number.isFinite(staleAfter) && now() - at > staleAfter * 1_000)
+              ? 'Waiting for a current observation.' : 'Status refreshed.');
           }).catch(() => {}).finally(() => { remaining -= 1; if (!remaining) finish(); });
       }
     });
@@ -284,7 +297,7 @@ export function mountStatusPage(window, document, model) {
     },
     setIntervalLabel: (seconds) => {
       const interval = seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`;
-      observationNote.textContent = `Checks every ${interval}. Percentages use recorded checks, not continuous uptime. Gray marks unknown or missing observations.`;
+      observationNote.textContent = `Checks are scheduled every ${interval}. The pass rate uses verified checks. Gray marks days with missing or unverified observations.`;
     },
     getHidden: () => document.hidden,
     dataUrls: resolveStatusDataUrls(document),
