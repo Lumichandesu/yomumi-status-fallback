@@ -15,6 +15,20 @@ export function classifyLanding({ url, redirects, status, mime, challenge, pageT
   return pageTitle === title && headingVisible && /\bComing\s+Soon\b/i.test(headingText) ? 'coming_soon' : 'unexpected_page';
 }
 
+// Runs in Chrome. A headline under the loading screen does not count as seen.
+export function unobscuredHeadline() {
+  const heading = document.querySelector('h1#launch-heading');
+  const word = heading?.querySelector('[data-coming-soon-word]');
+  if (!word || !word.textContent.trim() || !word.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return false;
+  const box = word.getBoundingClientRect();
+  if (box.width < 1 || box.height < 1) return false;
+  const centerX = box.left + box.width / 2, centerY = box.top + box.height / 2;
+  if (centerX < 0 || centerX >= innerWidth || centerY < 0 || centerY >= innerHeight) return false;
+  if (!heading.contains(document.elementFromPoint(centerX,centerY))) return false;
+  // Capture the words and visibility from the same rendered frame.
+  return heading.innerText.trim() || false;
+}
+
 export async function observeBrowser(chromium, executablePath) {
   // A new profile has no Yomumi session, owner credentials, proxy, or special request headers.
   const browser = await chromium.launch({executablePath, headless: false, chromiumSandbox:true, timeout: 20_000});
@@ -40,15 +54,11 @@ export async function observeBrowser(chromium, executablePath) {
     const challenge = headers['cf-mitigated']==='challenge' || /just a moment|attention required/i.test(pageTitle);
     const state={url:page.url(), redirects, status:response.status(), mime:headers['content-type'], challenge, pageTitle, headingVisible:false, headingText:''};
     if (response.status() === 200 && !challenge && pageTitle === title) {
-      const heading = page.locator('h1#launch-heading');
-      state.headingVisible = await page.waitForFunction(() => {
-        const el=document.querySelector('h1#launch-heading');
-        if (!el) return false;
-        const rect=el.getBoundingClientRect(), style=getComputedStyle(el);
-        return style.visibility==='visible' && Number(style.opacity)>0.25 && rect.width>0 && rect.height>0;
-      },null,{timeout:7000}).then(()=>true,()=>false);
-      if (state.headingVisible) {
-        state.headingText = await heading.innerText({timeout:2000});
+      const sample = await page.waitForFunction(unobscuredHeadline,null,{timeout:12000}).catch(()=>null);
+      if (sample) {
+        state.headingText = await sample.jsonValue();
+        state.headingVisible = true;
+        await sample.dispose();
       }
     }
     return classifyLanding(state);

@@ -8,6 +8,14 @@
     "serve": "bun --no-env-file run src/server.ts",
     "test": "node --test tests/*.test.mjs && bun --no-env-file test tests/server.test.ts"
   },
-  "engines": { "node": ">=22", "bun": ">=1.4.2" },
-  "dependencies": { "elysia": "1.4.30" }
+  "engines": {
+    "node": ">=22",
+    "bun": ">=1.4.2"
+  },
+  "dependencies": {
+    "elysia": "1.4.30"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.1"
+  }
 }
