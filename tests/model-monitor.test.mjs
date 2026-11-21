@@ -35,7 +35,7 @@ function measuredReport(time = NOW) {
 function bindingReport(time = NOW) {
   return { schemaVersion: 1, probe: 'worker_service_binding', checkedAt: stamp(time), systems: ['website', 'api'].map((id) => ({ id, probe: 'worker_service_binding', status: 'operational', checkedAt: stamp(time), latencyMs: id === 'website' ? 13 : 8, reasonCode: 'service_binding_passed' })) };
 }
-function fixtureFetch({ website = () => html(), api = () => json({ status: 'healthy', service: 'yomumi-api' }), dependencies = () => json(measuredReport()), serviceProbe } = {}) {
+function fixtureFetch({ website = () => html(), api = () => json({ status: 'healthy', service: 'yomumi-api' }), dependencies = () => json(measuredReport()), serviceProbe = () => json(bindingReport()) } = {}) {
   const calls = [];
   const fetchImpl = async (url, options) => {
     const target = new URL(url);
@@ -51,7 +51,7 @@ function fixtureFetch({ website = () => html(), api = () => json({ status: 'heal
   };
   return { calls, fetchImpl };
 }
-const check = (fixture, extras = {}) => runChecks({ apiBase: API_BASE, fetchImpl: fixture.fetchImpl, now: () => NOW, ...extras });
+const check = (fixture, extras = {}) => runChecks({ apiBase: API_BASE, fetchImpl: fixture.fetchImpl, now: () => NOW, ...serviceConfiguration, ...extras });
 
 test('measured schema 2 DB SELECT 1 and Redis PING observations retain their timestamps', async () => {
   const fixture = fixtureFetch({ dependencies: () => json(measuredReport(NOW - 30000)) });
@@ -62,7 +62,7 @@ test('measured schema 2 DB SELECT 1 and Redis PING observations retain their tim
   assert.equal(row(observation, 'database').checkedAt, stamp(NOW - 30000));
   assert.equal(row(observation, 'cache').checkedAt, stamp(NOW - 30000));
   assert.equal(observation.checkedAt, stamp(NOW));
-  assert.equal(fixture.calls[0].url, 'https://yomumi.moe/');
+  assert.ok(!fixture.calls.some(call => call.url === 'https://yomumi.moe/'));
 });
 
 test('legacy hardcoded reports never produce green dependencies or publish their private fields', async () => {
@@ -89,16 +89,14 @@ test('blocked and redirected requests are unknown without retry or automatic out
     assert.equal(result.reasonCode, 'probe_blocked');
   }
   const fixture = fixtureFetch({ website: () => html('blocked', 403), api: () => json({}, 429), dependencies: () => json({}, 302) });
-  const observation = await check(fixture);
-  assert.equal(fixture.calls.length, 3);
+  const observation = await check(fixture, { serviceProbeUrl: undefined, serviceProbeToken: undefined });
+  assert.equal(fixture.calls.length, 2);
   assert.ok(observation.components.every((component) => component.status === 'unknown'));
   assert.equal(recordObservation(null, observation).incidents.length, 0);
 });
 
 test('HTTP 200 malformed payloads, wrong contracts, and challenge pages cannot claim availability', async () => {
   const cases = [
-    { website: () => html('<title>Just a moment</title><div>cf-chl-fixture</div>') },
-    { website: () => new Response('<title>Yomumi</title>', { headers: { 'Content-Type': 'text/plain' } }) },
     { api: () => new Response('{broken', { headers: { 'Content-Type': 'application/json' } }) },
     { api: () => json({ status: 'healthy', service: 'another-service' }) },
     { dependencies: () => new Response('{broken', { headers: { 'Content-Type': 'application/json' } }) },
@@ -107,7 +105,7 @@ test('HTTP 200 malformed payloads, wrong contracts, and challenge pages cannot c
   for (const setup of cases) {
     const fixture = fixtureFetch(setup);
     const observation = await check(fixture);
-    const affected = setup.website ? ['website'] : setup.api ? ['api'] : ['database', 'cache'];
+    const affected = setup.api ? ['api'] : ['database', 'cache'];
     for (const id of affected) assert.equal(row(observation, id).status, 'unknown');
     assert.equal(fixture.calls.length, 3, 'unverified HTTP 200 content is not an outage retry');
   }
@@ -179,15 +177,15 @@ test('timeouts bound hanging fetch and hanging bodies even when cancellation nev
 
 test('one outage retry can recover without declaring an incident; sustained HTTP 503 produces outage', async () => {
   let attempts = 0;
-  const recovering = fixtureFetch({ website: () => ++attempts === 1 ? html('unavailable', 503) : html() });
+  const recovering = fixtureFetch({ api: () => ++attempts === 1 ? json({}, 503) : json({ status: 'healthy', service: 'yomumi-api' }) });
   const recovered = await check(recovering);
   assert.equal(attempts, 2);
-  assert.equal(row(recovered, 'website').status, 'operational');
+  assert.equal(row(recovered, 'api').status, 'operational');
   assert.equal(recordObservation(null, recovered).incidents.length, 0);
   let failures = 0;
-  const sustained = await check(fixtureFetch({ website: () => { failures++; return html('private upstream response', 503); } }));
+  const sustained = await check(fixtureFetch({ api: () => { failures++; return json('private upstream response', 503); } }));
   assert.equal(failures, 2);
-  assert.equal(row(sustained, 'website').status, 'outage');
+  assert.equal(row(sustained, 'api').status, 'outage');
   assert.equal(recordObservation(null, sustained).incidents.length, 1);
   assert.doesNotMatch(JSON.stringify(sustained), /private upstream response/);
 });
@@ -200,10 +198,10 @@ test('invalid private target configuration fails generically before any network 
   assert.equal(called, false);
 });
 
-test('only blocked external requests may use authenticated service-binding measurements with explicit scope', async () => {
+test('the website uses the authenticated service binding independently and a blocked API can use its own scoped fallback', async () => {
   const fixture = fixtureFetch({ website: () => html('blocked', 403), api: () => json({}, 429), serviceProbe: () => json(bindingReport(NOW - 10000)) });
   const observation = await check(fixture, serviceConfiguration);
-  assert.equal(fixture.calls.length, 4);
+  assert.equal(fixture.calls.length, 3);
   const authenticated = fixture.calls.find((call) => call.url === SERVICE_PROBE_URL);
   assert.equal(authenticated.options.headers.Authorization, `Bearer ${SERVICE_PROBE_TOKEN}`);
   assert.equal(authenticated.options.redirect, 'manual');
@@ -212,7 +210,7 @@ test('only blocked external requests may use authenticated service-binding measu
     const component = row(observation, id);
     assert.equal(component.status, 'operational');
     assert.equal(component.checkedAt, stamp(NOW - 10000));
-    assert.equal(component.reason, 'Service check passed; public access could not be tested by the external monitor.');
+    assert.equal(component.reason, id === 'website' ? 'Internal website check passed.' : 'Service check passed; public access could not be tested by the external monitor.');
   }
   assert.equal(row(observation, 'website').latencyMs, 13);
   assert.equal(row(observation, 'api').latencyMs, 8);
@@ -224,29 +222,24 @@ test('only blocked external requests may use authenticated service-binding measu
   assert.ok(!JSON.stringify(snapshot).includes(SERVICE_PROBE_URL));
 });
 
-test('service binding never overrides a real public outage or unverified HTTP 200 content', async () => {
-  for (const scenario of [
-    { website: () => html('unavailable', 503), api: () => json({}, 403), retained: 'website', expected: 'outage' },
-    { website: () => html('<title>wrong content</title>'), api: () => json({}, 403), retained: 'website', expected: 'unknown' },
-    { website: () => html('blocked', 403), api: () => json({}, 503), retained: 'api', expected: 'outage' },
-  ]) {
-    const observation = await check(fixtureFetch({ ...scenario, serviceProbe: () => json(bindingReport()) }), serviceConfiguration);
-    assert.equal(row(observation, scenario.retained).status, scenario.expected);
-    assert.notEqual(row(observation, scenario.retained).reason, 'Service check passed; public access could not be tested by the external monitor.');
-    assert.equal(row(observation, scenario.retained === 'website' ? 'api' : 'website').status, 'operational');
-    if (scenario.expected === 'outage') assert.equal(recordObservation(null, observation).incidents.length, 1);
+test('the internal website check never infers website health from public ingress', async () => {
+  for (const publicStatus of [200, 403, 500]) {
+    const report = bindingReport();
+    Object.assign(report.systems[0], { status: 'outage', reasonCode: 'service_unavailable' });
+    const fixture = fixtureFetch({ website: () => html('Yomumi', publicStatus), serviceProbe: () => json(report) });
+    const value = await check(fixture);
+    assert.equal(row(value, 'website').status, 'outage');
+    assert.equal(row(value, 'website').reason, 'Internal website check failed.');
+    assert.ok(!fixture.calls.some(call => call.url === 'https://yomumi.moe/'));
   }
-  const healthy = fixtureFetch({ serviceProbe: () => { throw new Error('Service binding must not be queried'); } });
-  await check(healthy, serviceConfiguration);
-  assert.equal(healthy.calls.length, 3);
 });
 
-test('a real external timeout is retained even when the other blocked component has a passing service binding', { timeout: 1500 }, async () => {
-  const fixture = fixtureFetch({ website: () => new Promise(() => {}), api: () => json({}, 403), serviceProbe: () => json(bindingReport()) });
-  const observation = await check(fixture, { ...serviceConfiguration, timeoutMs: 10 });
-  assert.equal(row(observation, 'website').status, 'outage');
-  assert.equal(row(observation, 'website').reason, 'The monitor request timed out.');
-  assert.equal(row(observation, 'api').status, 'operational');
+test('the public API keeps its own outage or unknown even when the website is internally healthy', { timeout: 1500 }, async () => {
+  for (const [api,expected] of [[() => json({}, 503), 'outage'], [() => html('<title>wrong content</title>'), 'unknown'], [() => new Promise(() => {}), 'outage']]) {
+    const value = await check(fixtureFetch({ api }), {timeoutMs:10});
+    assert.equal(row(value, 'api').status, expected);
+    assert.equal(row(value, 'website').status, 'operational');
+  }
 });
 
 test('binding report schema, markers, duplicate IDs, timestamps, and per-row success evidence are mandatory', async () => {
@@ -280,7 +273,7 @@ test('a measured binding failure may declare an outage but unknown cannot resolv
   const setup = (serviceProbe) => fixtureFetch({ website: () => html('blocked', 403), api: () => json({}, 403), serviceProbe });
   const failure = await check(setup(() => json(report)), serviceConfiguration);
   assert.equal(row(failure, 'website').status, 'outage');
-  assert.equal(row(failure, 'website').reason, 'Service check failed; public access could not be tested by the external monitor.');
+  assert.equal(row(failure, 'website').reason, 'Internal website check failed.');
   let snapshot = recordObservation(null, failure);
   assert.equal(snapshot.incidents.length, 1);
   const unknownReport = bindingReport(NOW + 1000);
@@ -309,8 +302,8 @@ test('invalid optional binding configuration fails generically before network an
   for (const configuration of cases) await assert.rejects(runChecks({ apiBase: API_BASE, fetchImpl: () => { called = true; }, ...configuration }), { message: 'Invalid service probe configuration' });
   assert.equal(called, false);
   const disabled = fixtureFetch({ website: () => html('blocked', 403), api: () => json({}, 403) });
-  const observation = await check(disabled);
-  assert.equal(disabled.calls.length, 3);
+  const observation = await check(disabled, { serviceProbeUrl: undefined, serviceProbeToken: undefined });
+  assert.equal(disabled.calls.length, 2);
   assert.equal(row(observation, 'website').status, 'unknown');
 });
 
@@ -472,21 +465,22 @@ test('primary and fallback builds enforce scoped CSP and publish only their inte
     await mkdir(join(fixtureRoot, 'scripts'));
     await mkdir(join(fixtureRoot, 'public'));
     await cp(join(sourceRoot, 'scripts/build.mjs'), join(fixtureRoot, 'scripts/build.mjs'));
-    for (const name of ['index.html', 'status.css', 'status-client.mjs', 'status-model.mjs']) await cp(join(sourceRoot, 'public', name), join(fixtureRoot, 'public', name));
+    for (const name of ['index.html', 'status.css', 'status-client.mjs', 'status-model.mjs', 'visitor-client.mjs', 'visitor-model.mjs']) await cp(join(sourceRoot, 'public', name), join(fixtureRoot, 'public', name));
+    await writeFile(join(fixtureRoot, 'public/visitor.json'), JSON.stringify({schemaVersion:1,checkedAt:null,status:'unknown',result:'unverified',vantage:'github_hosted'}));
     await writeFile(join(fixtureRoot, 'public/status.json'), JSON.stringify(recordObservation(null, observe())));
     const runBuild = (fallback = '') => promisify(execFile)(process.env.BUN_BIN || 'bun', ['--no-env-file', 'run', join(fixtureRoot, 'scripts/build.mjs')], { env: { ...process.env, STATUS_DATA_URL: fallback }, timeout: 10000 });
     await runBuild();
     const primary = await readFile(join(fixtureRoot, 'dist/index.html'), 'utf8');
     assert.match(primary, /http-equiv="Content-Security-Policy"/);
     const scheduledUrl = 'https://yomumi-status-monitor.yomumi.workers.dev/status.json';
-    assert.ok(primary.includes(`default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${scheduledUrl}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`));
+    assert.ok(primary.includes(`default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${scheduledUrl.replace('/status.json','/visitor.json')} ${scheduledUrl}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`));
     assert.match(primary, /name="status-data-url" content="\.\/status\.json"/);
     assert.equal(await readFile(join(fixtureRoot, 'dist/CNAME'), 'utf8'), 'status.yomumi.moe\n');
     assert.ok(validateSnapshot(JSON.parse(await readFile(join(fixtureRoot, 'dist/status.json'), 'utf8'))));
     const fallbackUrl = 'https://raw.githubusercontent.com/Lumichandesu/yomumi-status/main/public/status.json';
     await runBuild(fallbackUrl);
     const fallback = await readFile(join(fixtureRoot, 'dist/index.html'), 'utf8');
-    assert.ok(fallback.includes(`connect-src 'self' ${scheduledUrl} ${fallbackUrl};`));
+    assert.ok(fallback.includes(`connect-src 'self' ${scheduledUrl.replace('/status.json','/visitor.json')} ${scheduledUrl} ${fallbackUrl} ${fallbackUrl.replace('/status.json','/visitor.json')};`));
     assert.ok(fallback.includes(`name="status-data-url" content="${fallbackUrl}"`));
     await assert.rejects(readFile(join(fixtureRoot, 'dist/CNAME')), { code: 'ENOENT' });
     await assert.rejects(readFile(join(fixtureRoot, 'dist/status.json')), { code: 'ENOENT' });

@@ -1,5 +1,9 @@
 # Yomumi Status
 
+The public-access panel reports a signed-out Chrome visit from a GitHub-hosted runner and a separate public HTTP observation by the Cloudflare monitor. Each opens the public root and verifies the intended Coming Soon document. The Chrome check uses a fresh profile and verifies the displayed heading. A challenge, an unexpected destination, an outage and an expired observation have distinct labels. Each observation expires after 45 minutes. GitHub may delay scheduled workflows; the displayed times are the actual checks.
+
+The platform systems panel reports internal website service, public API, database and cache observations with their existing recorded history. The previous website history includes service-availability observations; the public-access panel starts with its own evidence.
+
 Independent, static service observations. The status UI has no application navigation, player,
 third-party scripts, account features, cookies, or dependency on the main application to render.
 

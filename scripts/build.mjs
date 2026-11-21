@@ -51,10 +51,11 @@ if (fallback) {
   html = html.replace('content="./status.json"', `content="${fallbackUrl}"`);
 } else {
   await cp(root + 'public/status.json', output + 'status.json');
+  await cp(root + 'public/visitor.json', output + 'visitor.json');
   await writeFile(output + 'CNAME', 'status.yomumi.moe\n');
 }
 html = html.replace('<meta name="referrer"', '<meta name="robots" content="noai, noimageai"><meta name="referrer"');
-const policy = `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' https://yomumi-status-monitor.yomumi.workers.dev/status.json${fallback ? ' ' + fallbackUrl : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
+const policy = `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' https://yomumi-status-monitor.yomumi.workers.dev/visitor.json https://yomumi-status-monitor.yomumi.workers.dev/status.json${fallback ? ' ' + fallbackUrl + ' ' + fallbackUrl.replace('/status.json', '/visitor.json') : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
 html = html.replace('<head>', `<head>\n  <meta http-equiv="Content-Security-Policy" content="${policy}">`);
 // Remove indentation between tags, preserving text, attributes and readable names.
 html = html.replace(/>\s+</gu, '><').trim() + '\n';

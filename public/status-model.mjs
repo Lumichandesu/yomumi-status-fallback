@@ -94,7 +94,7 @@ export function buildView(snapshot, now = Date.now(), updateFailed = false) {
   const unverified = components.filter(c => c.status === 'unknown');
   const partial = overall === 'unknown' && unverified.length < components.length;
   const statusLabel = partial ? `${components.length - unverified.length} of ${components.length} services operational`
-    : overall === 'operational' ? 'All monitored services operational' : overall === 'outage' ? 'Some services unavailable' : overall === 'degraded' ? 'Some services degraded' : 'Status unknown';
+    : overall === 'operational' ? 'All platform systems operational' : overall === 'outage' ? 'Some platform systems unavailable' : overall === 'degraded' ? 'Some platform systems degraded' : 'Status unknown';
   const description = stale ? (parsed ? 'Monitoring data is not current. Current availability is unknown.' : 'Waiting for the first independent monitor observation.')
     : updateFailed ? 'Showing the last recorded observation; the latest refresh could not be retrieved.'
     : partial ? `The monitor could not verify ${new Intl.ListFormat('en').format(unverified.map(c => c.name))}.`

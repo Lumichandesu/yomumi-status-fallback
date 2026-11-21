@@ -19,10 +19,11 @@ async function withBuildFixture(callback) {
     await mkdir(join(fixtureRoot, 'scripts'));
     await mkdir(join(fixtureRoot, 'public'));
     await cp(join(sourceRoot, 'scripts', 'build.mjs'), join(fixtureRoot, 'scripts', 'build.mjs'));
-    for (const name of ['index.html', 'status.css', 'status-client.mjs', 'status-model.mjs']) {
+    for (const name of ['index.html', 'status.css', 'status-client.mjs', 'status-model.mjs', 'visitor-client.mjs', 'visitor-model.mjs']) {
       await cp(join(sourceRoot, 'public', name), join(fixtureRoot, 'public', name));
     }
     // Use fixture data in both repositories; the fallback deliberately has no hosted snapshot.
+    await writeFile(join(fixtureRoot, 'public/visitor.json'), JSON.stringify({schemaVersion:1,checkedAt:null,status:'unknown',result:'unverified',vantage:'github_hosted'}));
     await writeFile(join(fixtureRoot, 'public', 'status.json'), JSON.stringify(validateSnapshot({
       schemaVersion: 1, generatedAt: '2026-10-01T00:00:00.000Z',
       monitor: { startedAt: '2026-10-01T00:00:00.000Z', intervalSeconds: 900, staleAfterSeconds: 2700 },
@@ -71,7 +72,7 @@ test('Bun ships one smaller hashed client bundle and stylesheet without a model 
     assert.match(generated.html, /http-equiv="Content-Security-Policy"/u);
     assert.match(generated.html, /script-src 'self';/u);
     assert.match(generated.html, /<noscript>/u);
-    const originalFiles = await Promise.all(['status-client.mjs', 'status-model.mjs', 'status.css'].map((name) => readFile(join(fixtureRoot, 'public', name))));
+    const originalFiles = await Promise.all(['status-client.mjs', 'status-model.mjs', 'visitor-client.mjs', 'visitor-model.mjs', 'status.css'].map((name) => readFile(join(fixtureRoot, 'public', name))));
     const originalBytes = originalFiles.reduce((bytes, contents) => bytes + contents.byteLength, 0);
     const generatedBytes = Buffer.byteLength(generated.js) + Buffer.byteLength(generated.css);
     assert.ok(generatedBytes < originalBytes * 0.8, `${generatedBytes} browser bytes must beat the ${originalBytes}-byte source payload by at least 20%`);
@@ -95,7 +96,7 @@ test('fallback keeps hashed bundles independent and rejects arbitrary data URLs 
     assert.equal(fallback.jsName, primary.jsName);
     assert.equal(fallback.cssName, primary.cssName);
     assert.ok(fallback.html.includes(`name="status-data-url" content="${FALLBACK_URL}"`));
-    assert.ok(fallback.html.includes(`https://yomumi-status-monitor.yomumi.workers.dev/status.json ${FALLBACK_URL};`));
+    assert.ok(fallback.html.includes(`https://yomumi-status-monitor.yomumi.workers.dev/status.json ${FALLBACK_URL} ${FALLBACK_URL.replace('/status.json','/visitor.json')};`));
     await assert.rejects(readFile(join(fixtureRoot, 'dist', 'CNAME')), { code: 'ENOENT' });
     await assert.rejects(readFile(join(fixtureRoot, 'dist', 'status.json')), { code: 'ENOENT' });
     await assert.rejects(build('https://arbitrary.invalid/private-status'));

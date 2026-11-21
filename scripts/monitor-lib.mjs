@@ -59,7 +59,7 @@ export async function requestObservation(url, { fetchImpl = fetch, now = Date.no
     return { status: reasonCode === 'response_invalid' ? 'unknown' : 'outage', reasonCode, latencyMs: Math.min(120000, Math.max(0, now() - start)) };
   } finally { clearTimeout(timer); controller.abort(); void response?.body?.cancel().catch(() => {}); }
 }
-export async function runChecks({ apiBase, websiteUrl = 'https://yomumi.moe/', publicApiUrl = 'https://yomumi.moe/healthz', serviceProbeUrl, serviceProbeToken, fetchImpl = fetch, now = Date.now, timeoutMs = 7000 } = {}) {
+export async function runChecks({ apiBase, publicApiUrl = 'https://yomumi.moe/healthz', serviceProbeUrl, serviceProbeToken, fetchImpl = fetch, now = Date.now, timeoutMs = 7000 } = {}) {
   let base;
   try { base = new URL(apiBase); } catch { throw new Error('Invalid monitor target configuration'); }
   if (base.protocol !== 'https:' || !/^yomumi-api-[a-z0-9-]+\.(?:asia-southeast1\.run\.app|as\.a\.run\.app)$/u.test(base.hostname) || base.port || base.username || base.password || base.search || base.hash || base.pathname !== '/') throw new Error('Invalid monitor target configuration');
@@ -69,24 +69,27 @@ export async function runChecks({ apiBase, websiteUrl = 'https://yomumi.moe/', p
     const first = await requestObservation(url, { ...options, limit });
     return first.status === 'outage' ? requestObservation(url, { ...options, limit }) : first;
   };
-  const [website, api, dependencies] = await Promise.all([retry(websiteUrl, 1048576), retry(publicApiUrl, 65536), retry(new URL('/api/status', base).href, 65536)]);
-  let checkedAt = iso(now());
+  const [binding, api, dependencies] = await Promise.all([
+    serviceProbe ? requestObservation(serviceProbe.url, { ...options, limit: 16384, bearerToken: serviceProbe.token }) : null,
+    retry(publicApiUrl, 65536), retry(new URL('/api/status', base).href, 65536),
+  ]);
+  const checkedAt = iso(now());
   const row = (id, result) => ({ id, name: COMPONENTS[id], status: result.status, checkedAt, latencyMs: result.latencyMs ?? null, reason: reasons[result.reasonCode] ?? null });
-  if (website.status === 'operational' && (!website.type.includes('text/html') || !/<title[^>]*>[^<]*yomumi/iu.test(website.text ?? '') || /cf-chl-|just a moment/iu.test(website.text ?? ''))) Object.assign(website, { status: 'unknown', reasonCode: 'response_invalid' });
   let apiJson, report;
   try { apiJson = JSON.parse(api.text); } catch {}
   if (api.status === 'operational' && (!api.type.includes('json') || apiJson?.status !== 'healthy' || apiJson.service !== 'yomumi-api')) Object.assign(api, { status: 'unknown', reasonCode: 'response_invalid' });
   try { report = JSON.parse(dependencies.text); } catch {}
-  const components = [row('website', website), row('api', api)];
-  if (serviceProbe && [website, api].some((result) => result.reasonCode === 'probe_blocked')) {
-    const result = await requestObservation(serviceProbe.url, { ...options, limit: 16384, bearerToken: serviceProbe.token });
-    const observations = serviceProbeObservations(result, now);
-    for (const [id, external] of [['website', website], ['api', api]]) {
-      if (external.reasonCode !== 'probe_blocked') continue;
-      const service = observations?.find((item) => item.id === id);
-      if (service) Object.assign(components.find((component) => component.id === id), row(id, { status: service.status, latencyMs: service.latencyMs, reasonCode: service.status === 'operational' ? 'service_probe_passed' : 'service_probe_failed' }), { checkedAt: service.checkedAt });
-    }
-    checkedAt = iso(now());
+  const services = binding ? serviceProbeObservations(binding, now) : null;
+  const website = services?.find(item => item.id === 'website');
+  const components = [
+    website ? { id: 'website', name: COMPONENTS.website, status: website.status, checkedAt: website.checkedAt,
+      latencyMs: website.latencyMs, reason: website.status === 'operational' ? 'Internal website check passed.' : 'Internal website check failed.' }
+      : row('website', { status: 'unknown', reasonCode: binding ? 'response_invalid' : 'not_configured' }),
+    row('api', api),
+  ];
+  const serviceApi = services?.find(item => item.id === 'api');
+  if (serviceApi && api.reasonCode === 'probe_blocked') {
+    components[1] = { ...row('api', { ...serviceApi, reasonCode: serviceApi.status === 'operational' ? 'service_probe_passed' : 'service_probe_failed' }), checkedAt: serviceApi.checkedAt };
   }
   for (const [id, reportId, probe] of [['database', 'database', 'select_1'], ['cache', 'cache_ratelimit', 'redis_ping']]) {
     const reported = report?.schemaVersion === 2 && report.statusScope === 'measured_components_only' && Array.isArray(report.systems) ? report.systems.filter((v) => v?.id === reportId) : [];

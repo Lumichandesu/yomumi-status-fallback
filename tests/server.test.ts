@@ -15,7 +15,7 @@ async function fixture(isFallback = false) {
   const directory = await mkdtemp(join(tmpdir(), 'yomumi-status-server-'));
   fixtures.push(directory);
   await mkdir(join(directory, 'assets'));
-  const policy = `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${worker}${isFallback ? ` ${fallback}` : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
+  const policy = `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${worker.replace('/status.json','/visitor.json')} ${worker}${isFallback ? ` ${fallback} ${fallback.replace('/status.json','/visitor.json')}` : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
   const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><link rel="stylesheet" href=".${css}"><script type="module" src=".${js}"></script></head><body>สถานะที่ยังไม่ทราบ</body></html>`;
   // Explicitly unobserved test data: no invented healthy service or uptime.
   const snapshot = validateSnapshot({
@@ -29,6 +29,7 @@ async function fixture(isFallback = false) {
     writeFile(join(directory, css), 'body { color: #333 }'),
     writeFile(join(directory, js), 'export const fixture = true;'),
     writeFile(join(directory, 'robots.txt'), 'User-agent: *\nAllow: /\n'),
+    writeFile(join(directory, 'visitor.json'), JSON.stringify({schemaVersion:1,checkedAt:null,status:'unknown',result:'unverified',vantage:'github_hosted'})),
     writeFile(join(directory, 'status.json'), JSON.stringify(snapshot)),
     writeFile(join(directory, '.env'), 'PRIVATE_FIXTURE_SECRET=must-not-be-served'),
     writeFile(join(directory, 'assets/index-unlisted.js'), 'must-not-be-served'),

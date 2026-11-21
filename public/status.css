@@ -34,6 +34,15 @@ h1 { font-size: clamp(25px, 4vw, 30px); font-weight: 640; letter-spacing: -.65px
 .refresh-button:disabled, .refresh-button[aria-disabled="true"] { opacity: .65; cursor: wait; }
 
 .status-operational { --state-color: var(--operational); --state-text: #286f58; }
+.visitor-section { margin-bottom: 30px; }
+.visitor-section .section-heading { margin: 0; }
+.visitor-intro { margin: 6px 0 15px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.visitor-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,260px),1fr)); gap: 12px; }
+.visitor-row { min-width: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.visitor-row h3 { font-size: 15px; }
+.visitor-origin, .visitor-row time { color: var(--muted); font-size: 12px; }
+.visitor-origin { margin-top: 3px; }
+.visitor-status { display: flex; align-items: center; gap: 8px; margin: 16px 0 4px; font-size: 15px; color: var(--state-text); }
 .status-degraded { --state-color: var(--degraded); --state-text: #816519; }
 .status-outage { --state-color: var(--outage); --state-text: #954a4b; }
 .status-unknown { --state-color: var(--unknown); --state-text: var(--muted); }
