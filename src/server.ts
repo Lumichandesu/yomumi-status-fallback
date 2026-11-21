@@ -5,11 +5,12 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { validateSnapshot } from '../public/status-model.mjs';
+import { validVisitor } from '../public/visitor-model.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../dist/', import.meta.url));
 const workerSnapshot = 'https://yomumi-status-monitor.yomumi.workers.dev/status.json';
 const fallbackSnapshot = 'https://raw.githubusercontent.com/Lumichandesu/yomumi-status/main/public/status.json';
-const policyFor = (fallback: boolean) => `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${workerSnapshot}${fallback ? ` ${fallbackSnapshot}` : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
+const policyFor = (fallback: boolean) => `default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self' ${workerSnapshot.replace('/status.json','/visitor.json')} ${workerSnapshot}${fallback ? ` ${fallbackSnapshot} ${fallbackSnapshot.replace('/status.json','/visitor.json')}` : ''}; base-uri 'none'; form-action 'none'; object-src 'none'; img-src 'none'`;
 const assetName = /^\.\/assets\/(index-[A-Za-z0-9_-]{8,64}\.(?:css|js))$/u;
 
 type Asset = {
@@ -80,6 +81,11 @@ export async function createStatusServer({ directory = defaultDirectory }: Statu
     const validated = validateSnapshot(raw);
     if (!validated || !isDeepStrictEqual(raw, validated)) throw new Error('Invalid or unsanitized built status snapshot');
     assets.set('/status.json', snapshot);
+    const visitor = await load('visitor.json', 'application/json; charset=utf-8', 'no-store', 1024);
+    if (!validVisitor(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(visitor.bytes)), 'github_hosted')) {
+      throw new Error('Invalid built visitor observation');
+    }
+    assets.set('/visitor.json', visitor);
   }
 
   const securityHeaders = {

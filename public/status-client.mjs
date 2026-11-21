@@ -1,3 +1,4 @@
+import { mountVisitorChecks } from './visitor-client.mjs';
 const STATES = new Set(['operational', 'degraded', 'outage', 'unknown']);
 const COMPONENT_NAMES = Object.freeze({ website: 'Website', api: 'Public API', database: 'Database', cache: 'Cache' });
 const FALLBACK_DATA_URL = 'https://raw.githubusercontent.com/Lumichandesu/yomumi-status/main/public/status.json';
@@ -283,14 +284,16 @@ export function mountStatusPage(window, document, model) {
   const refreshButton = document.getElementById('refresh-status');
   const observationNote = document.getElementById('observation-note');
   let refreshing = false;
+  const visitors = mountVisitorChecks(window, document, resolveStatusDataUrl(document) !== './status.json');
   const controller = createStatusController({
     fetchSnapshot: window.fetch.bind(window),
     validateSnapshot: model.validateSnapshot,
     buildView: model.buildView,
-    renderView: (view) => renderStatusView(document, view),
+    renderView: (view) => { renderStatusView(document, view); visitors.render(); },
     setFeedback: (message) => { document.getElementById('refresh-feedback').textContent = message; },
     setBusy: (busy) => {
       refreshing = busy;
+      if (busy) void visitors.refresh();
       // Keep the button in the tab order while waiting, so a keyboard refresh does not lose focus.
       refreshButton.setAttribute('aria-disabled', String(busy));
       refreshButton.setAttribute('aria-busy', String(busy));
@@ -314,6 +317,7 @@ export function mountStatusPage(window, document, model) {
   const onPageShow = (event) => { if (event.persisted) controller.resume(); };
   function cleanup() {
     controller.destroy();
+    visitors.destroy();
     refreshButton.removeEventListener('click', onRefresh);
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('online', onOnline);

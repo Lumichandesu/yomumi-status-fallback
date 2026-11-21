@@ -30,6 +30,23 @@
           </button>
         </div>
 
+        <section class="visitor-section" id="visitor-checks" aria-labelledby="visitor-heading">
+          <div class="section-heading"><h2 id="visitor-heading">Public website access</h2></div>
+          <p class="visitor-intro">Can a signed-out visitor open yomumi.moe and see Coming Soon?</p>
+          <div class="visitor-grid" aria-live="polite">
+            <article class="visitor-row status-unknown" id="visitor-github_hosted">
+              <h3>External browser</h3><p class="visitor-origin">Chrome on a GitHub-hosted runner</p>
+              <p class="visitor-status"><span class="status-dot" aria-hidden="true"></span><strong data-verdict>Awaiting observation</strong></p>
+              <time>No observation available</time>
+            </article>
+            <article class="visitor-row status-unknown" id="visitor-cloudflare_public_http">
+              <h3>External HTTP check</h3><p class="visitor-origin">Public network request from Cloudflare</p>
+              <p class="visitor-status"><span class="status-dot" aria-hidden="true"></span><strong data-verdict>Awaiting observation</strong></p>
+              <time>No observation available</time>
+            </article>
+          </div>
+        </section>
+        <div class="section-heading"><h2>Platform systems</h2></div>
         <section class="availability-banner status-unknown" id="availability-banner" aria-labelledby="overall-label">
           <span class="status-dot" aria-hidden="true"></span>
           <div>
@@ -45,7 +62,7 @@
 
         <section class="components-section" aria-labelledby="components-heading">
           <div class="section-heading">
-            <h2 id="components-heading">Services</h2>
+            <h2 id="components-heading">System health and history</h2>
             <span>Past 90 days</span>
           </div>
           <div id="component-list" class="component-list">
