@@ -162,7 +162,6 @@ export function createStatusController(options) {
   let inFlight = null;
   let pollTimer = null;
   let ageTimer = null;
-  let abortController = null;
   let cancelRequest = null;
   let intervalMs = DEFAULT_INTERVAL_MS;
 
@@ -191,55 +190,77 @@ export function createStatusController(options) {
     stopTimers();
     setBusy(true);
     setFeedback('Checking status…');
-    abortController = new AbortController();
-    const requestAbortController = abortController;
     let timeout;
     let cancelled = false;
     const request = new Promise((resolve, reject) => {
-      const urls = [...new Set(dataUrls)].filter((url) => ['./status.json', FALLBACK_DATA_URL, SCHEDULED_DATA_URL].includes(url));
-      let remaining = urls.length;
+      const allowed = [...new Set(dataUrls)].filter((url) => ['./status.json', FALLBACK_DATA_URL, SCHEDULED_DATA_URL].includes(url));
+      const primary = allowed.includes(SCHEDULED_DATA_URL) ? SCHEDULED_DATA_URL : allowed[0];
+      const backup = allowed.find((url) => url !== primary);
+      const at = (item) => item?.generatedAt ? Date.parse(item.generatedAt) : -Infinity;
+      const previousAt = at(snapshot);
+      let selected;
       let settled = false;
-      let accepted = false;
-      const finish = () => {
+      let standbyStarted = false;
+      let primaryTimer;
+      let active;
+      function finish(cancel = false) {
         if (settled) return;
         settled = true;
-        requestAbortController.abort();
-        if (accepted) resolve(true);
-        else reject(new Error('No valid status snapshot'));
-      };
-      cancelRequest = () => { cancelled = true; settled = true; requestAbortController.abort(); reject(new Error('Request paused')); };
-      timeout = setTimer(finish, REQUEST_TIMEOUT_MS);
-      if (!remaining) finish();
-      for (const url of urls) {
-        Promise.resolve().then(() => fetchSnapshot(url, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: requestAbortController.signal }))
-          .then(async (response) => {
-            if (settled || cancelled || destroyed || paused || getHidden()) return;
-            if (!response.ok) throw new Error('Status snapshot unavailable');
-            const validated = validateSnapshot(await response.json());
-            if (!validated || typeof validated !== 'object') throw new Error('Invalid status snapshot');
-            const at = Date.parse(validated.generatedAt);
-            if (validated.generatedAt !== null && (!Number.isFinite(at) || at > now() + 60_000)) throw new Error('Invalid observation time');
-            if (settled || cancelled || destroyed || paused || getHidden()) return;
-            const previousAt = Date.parse(snapshot?.generatedAt);
-            if (Number.isFinite(previousAt) && (!Number.isFinite(at) || at < previousAt)) return;
-            // Paint the first usable source immediately; a slower source may only advance it.
-            if (accepted && at === previousAt) return;
-            snapshot = validated;
-            accepted = true;
-            updateFailed = false;
-            const seconds = snapshot.monitor?.intervalSeconds;
-            intervalMs = Number.isFinite(seconds) && seconds >= 60 ? seconds * 1_000 : DEFAULT_INTERVAL_MS;
-            setIntervalLabel(seconds >= 60 ? seconds : DEFAULT_INTERVAL_MS / 1_000);
-            render();
-            const staleAfter = snapshot.monitor?.staleAfterSeconds;
-            setFeedback(!Number.isFinite(at) || (Number.isFinite(staleAfter) && now() - at > staleAfter * 1_000)
-              ? 'Waiting for a current observation.' : 'Status refreshed.');
-          }).catch(() => {}).finally(() => { remaining -= 1; if (!remaining) finish(); });
+        clearTimer(primaryTimer);
+        active?.abort();
+        if (!cancel && selected) resolve(selected);
+        else reject(new Error(cancel ? 'Request paused' : 'No valid status snapshot'));
       }
+      cancelRequest = () => { cancelled = true; finish(true); };
+      function openStandby() {
+        if (settled || standbyStarted) return;
+        standbyStarted = true;
+        clearTimer(primaryTimer);
+        active?.abort();
+        if (backup) void load(backup, false);
+        else finish();
+      }
+      async function load(url, preferred) {
+        const controller = new AbortController();
+        active = controller;
+        try {
+          const response = await fetchSnapshot(url, { cache: 'no-store', credentials: 'omit', redirect: 'error', signal: controller.signal });
+          if (!response.ok) return;
+          const candidate = validateSnapshot(await response.json());
+          if (settled || controller.signal.aborted || cancelled || paused || getHidden() || !candidate || typeof candidate !== 'object') return;
+          const observed = at(candidate);
+          if (candidate.generatedAt !== null && (!Number.isFinite(observed) || observed > now() + 60_000)) return;
+          if (observed < previousAt) return;
+          if (!selected || observed > at(selected)) selected = candidate;
+          const staleSeconds = candidate.monitor?.staleAfterSeconds;
+          const maxAge = Number.isFinite(staleSeconds) && staleSeconds > 0 ? Math.min(staleSeconds, 2700) : 2700;
+          if (preferred && Number.isFinite(observed) && now() - observed <= maxAge * 1000) finish();
+        } catch { /* A rejected primary is a fallback, not an outage verdict. */ }
+        finally {
+          if (!settled && !controller.signal.aborted) {
+            if (preferred) openStandby();
+            else finish();
+          }
+        }
+      }
+      timeout = setTimer(finish, REQUEST_TIMEOUT_MS);
+      if (!primary) return finish();
+      if (backup) primaryTimer = setTimer(openStandby, 2_000);
+      void load(primary, true);
     });
-    inFlight = request.then((updated) => {
+    inFlight = request.then((validated) => {
       if (destroyed || cancelled || paused || getHidden()) return false;
-      return updated;
+      snapshot = validated;
+      updateFailed = false;
+      const seconds = snapshot.monitor?.intervalSeconds;
+      intervalMs = Number.isFinite(seconds) && seconds >= 60 ? seconds * 1_000 : DEFAULT_INTERVAL_MS;
+      setIntervalLabel(seconds >= 60 ? seconds : DEFAULT_INTERVAL_MS / 1_000);
+      render();
+      const observed = Date.parse(snapshot.generatedAt);
+      const staleAfter = snapshot.monitor?.staleAfterSeconds;
+      setFeedback(!Number.isFinite(observed) || (Number.isFinite(staleAfter) && now() - observed > staleAfter * 1_000)
+        ? 'Waiting for a current observation.' : 'Status refreshed.');
+      return true;
     }).catch(() => {
       if (destroyed || cancelled || paused || getHidden()) return false;
       updateFailed = true;
@@ -249,7 +270,6 @@ export function createStatusController(options) {
     }).finally(() => {
       clearTimer(timeout);
       cancelRequest = null;
-      abortController = null;
       inFlight = null;
       if (!destroyed) { setBusy(false); schedule(); }
     });
@@ -339,3 +359,4 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined' && document
     document.getElementById('refresh-status').disabled = true;
   });
 }
+
