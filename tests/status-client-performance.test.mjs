@@ -59,227 +59,108 @@ function fixture(t, dataUrls = ['./status.json', SCHEDULED_URL]) {
   };
 }
 
-test('the first validated source renders without waiting for a slower source', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  let completed = false;
-  refreshing.then(() => { completed = true; });
-  await flush();
-  assert.equal(f.requests.length, 2);
-  f.requests[0].resolve(response(snapshot(NOW - 30_000)));
-  await flush();
-  assert.equal(completed, false, 'the slow source remains pending');
-  assert.equal(f.views.length, 1, 'a usable view is already visible');
-  assert.equal(f.views[0].updatedAt, stamp(NOW - 30_000));
-  assert.equal(f.views[0].overall, 'operational');
-  assert.deepEqual(f.busy, [true]);
-  f.requests[1].reject(new Error('Fixture source unavailable'));
-  assert.equal(await refreshing, true);
-  assert.equal(f.views.length, 1, 'settling the request does not redraw the same snapshot');
-  assert.deepEqual(f.busy, [true, false]);
-});
 
-test('a slower newer snapshot upgrades the visible first result immediately', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve(response(snapshot(NOW - 30_000)));
-  await flush();
-  f.requests[1].resolve(response(snapshot(NOW, 'degraded')));
-  assert.equal(await refreshing, true);
-  assert.deepEqual(f.views.map((view) => view.updatedAt), [stamp(NOW - 30_000), stamp(NOW)]);
-  assert.equal(f.views.at(-1).overall, 'degraded');
+test('fresh Cloudflare makes one private-safe GET and skips GitHub', async (t)=>{
+  const f=fixture(t);
+  const p=f.controller.refresh();
+  assert.deepEqual(f.requests.map(r=>r.url), [SCHEDULED_URL]);
+  assert.equal(f.requests[0].options.credentials, 'omit');
+  assert.equal(f.requests[0].options.redirect, 'error');
+  assert.equal(f.requests[0].options.cache, 'no-store');
+  f.requests[0].resolve(response(snapshot()));
+  assert.equal(await p,true);
+  assert.equal(f.views[0].overall,'operational');
+  assert.equal(f.requests.length,1);
 });
-
-test('a slower older or equal observation cannot replace the first visible observation', async (t) => {
-  for (const time of [NOW - 1_000, NOW]) {
-    const f = fixture(t);
-    const refreshing = f.controller.refresh();
+for (const mode of ['unreachable','invalid','future','stale','timeout','body-timeout']) {
+  test('Cloudflare '+mode+' uses only the fallback and ignores late primary', async (t)=>{
+    const f=fixture(t,[FALLBACK_URL,SCHEDULED_URL]);
+    const p=f.controller.refresh();
+    const primary=f.requests[0];
+    if (mode==='unreachable') primary.reject(new Error('unreachable'));
+    if (mode==='invalid') primary.resolve(response({schemaVersion:99}));
+    if (mode==='future') primary.resolve(response(snapshot(NOW+61_000)));
+    if (mode==='stale') primary.resolve(response(snapshot(NOW-3_600_000)));
+    const body=deferred();
+    if (mode==='body-timeout') primary.resolve({ok:true,json:()=>body.promise});
+    if (mode.endsWith('timeout')) { await f.advance(1999); assert.equal(f.requests.length,1); await f.advance(1); }
+    else await flush();
+    assert.deepEqual(f.requests.map(r=>r.url),[SCHEDULED_URL,FALLBACK_URL]);
+    assert.equal(primary.options.signal.aborted,true);
+    f.requests[1].resolve(response(snapshot(NOW)));
+    assert.equal(await p,true);
+    if (mode==='timeout') primary.resolve(response(snapshot(NOW+10_000,'outage')));
+    if (mode==='body-timeout') body.resolve(snapshot(NOW+10_000,'outage'));
     await flush();
-    f.requests[0].resolve(response(snapshot(NOW)));
+    assert.equal(f.views.length,1);
+    assert.equal(f.views[0].overall,'operational');
+  });
+}
+test('overall deadline retains stale evidence but never shows it as current', async(t)=>{
+  const f=fixture(t);
+  const p=f.controller.refresh();
+  f.requests[0].resolve(response(snapshot(NOW-3_600_000)));
+  await flush();
+  await f.advance(6000);
+  assert.equal(await p,true);
+  assert.equal(f.requests[1].options.signal.aborted,true);
+  assert.equal(f.views[0].overall,'unknown');
+});
+test('when both sources hang hard deadline returns unknown', async(t)=>{
+  const f=fixture(t);
+  const p=f.controller.refresh();
+  await f.advance(6000);
+  assert.equal(await p,false);
+  assert.equal(f.views[0].updatedAt,null);
+  assert.ok(f.requests.every(r=>r.options.signal.aborted));
+});
+test('rollback in timestamps requires standby and cannot overwrite last observation', async(t)=>{
+  const f=fixture(t);
+  let p=f.controller.refresh();
+  f.requests[0].resolve(response(snapshot()));
+  assert.equal(await p,true);
+  p=f.controller.refresh();
+  f.requests[1].resolve(response(snapshot(NOW-1000,'outage')));
+  await flush();
+  f.requests[2].resolve(response(snapshot(NOW-2000,'outage')));
+  assert.equal(await p,false);
+  assert.equal(f.views.at(-1).updatedAt,stamp(NOW));
+  assert.equal(f.views.at(-1).overall,'operational');
+  assert.match(f.feedback.at(-1),/last available observation/);
+});
+for (const action of ['pause','destroy','hidden']) {
+  test(action+' cannot let a late snapshot paint', async(t)=>{
+    const f=fixture(t);
+    const p=f.controller.refresh();
+    await f.advance(2000);
+    if(action==='hidden') { f.setHidden(true); await f.advance(4000); } else f.controller[action]();
+    assert.equal(await p,false);
+    f.requests[1].resolve(response(snapshot()));
     await flush();
-    f.requests[1].resolve(response(snapshot(time, 'outage')));
-    assert.equal(await refreshing, true);
-    assert.equal(f.views.length, 1);
-    assert.equal(f.views.at(-1).overall, 'operational');
-  }
-});
-
-test('a future-dated source is rejected while a valid second source still renders', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve(response(snapshot(NOW + 60_001, 'outage')));
-  await flush();
-  assert.equal(f.views.length, 0);
-  f.requests[1].resolve(response(snapshot(NOW, 'unknown')));
-  assert.equal(await refreshing, true);
-  assert.equal(f.views.length, 1);
-  assert.equal(f.views[0].overall, 'unknown', 'a retrieved snapshot is not automatically green');
-});
-
-test('later refreshes never regress an existing observation and report a failed refresh honestly', async (t) => {
-  const f = fixture(t);
-  let refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve(response(snapshot(NOW)));
-  f.requests[1].reject(new Error('Unavailable'));
-  assert.equal(await refreshing, true);
-  refreshing = f.controller.refresh();
-  await flush();
-  f.requests[2].resolve(response(snapshot(NOW - 1_000, 'outage')));
-  await flush();
-  assert.equal(f.views.length, 1, 'an older source does not flash before the second source arrives');
-  f.requests[3].resolve(response(snapshot(NOW + 60_001)));
-  assert.equal(await refreshing, false);
-  assert.equal(f.views.at(-1).updatedAt, stamp(NOW));
-  assert.equal(f.views.at(-1).overall, 'operational');
-  assert.match(f.views.at(-1).description, /latest refresh could not be retrieved/);
-  assert.match(f.feedback.at(-1), /last available observation/);
-});
-
-test('the six-second deadline retains an already rendered source and ignores late responses', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve(response(snapshot(NOW - 30_000)));
-  await flush();
-  await f.advance(5_999);
-  assert.equal(f.requests[1].options.signal.aborted, false);
-  await f.advance(1);
-  assert.equal(await refreshing, true);
-  assert.equal(f.requests[1].options.signal.aborted, true);
-  assert.equal(f.views.length, 1);
-  f.requests[1].resolve(response(snapshot(NOW, 'outage')));
-  await flush();
-  assert.equal(f.views.length, 1, 'an abort-ignoring source cannot render after the deadline');
-  assert.equal(f.views.at(-1).overall, 'operational');
-  assert.doesNotMatch(f.feedback.at(-1), /Unable/);
-});
-
-test('the deadline without a usable source shows unknown instead of unverified availability', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  await f.advance(6_000);
-  assert.equal(await refreshing, false);
-  assert.equal(f.views.at(-1).overall, 'unknown');
-  assert.equal(f.views.at(-1).updatedAt, null);
-  assert.ok(f.requests.every((request) => request.options.signal.aborted));
-});
-
-test('pausing or destroying a pending refresh prevents all late renders', async (t) => {
-  for (const action of ['pause', 'destroy']) {
-    const f = fixture(t);
-    const refreshing = f.controller.refresh();
-    await flush();
-    f.controller[action]();
-    assert.equal(await refreshing, false);
-    f.requests[0].resolve(response(snapshot(NOW)));
-    f.requests[1].resolve(response(snapshot(NOW + 1_000)));
-    await flush();
-    await f.advance(60_000);
-    assert.equal(f.views.length, 0);
-    assert.equal(f.requests.length, 2);
-    assert.equal(f.timers.size, 0);
-    assert.ok(f.requests.every((request) => request.options.signal.aborted));
-  }
-});
-
-test('backgrounding between fetch and JSON completion suppresses late paint', async (t) => {
-  const f = fixture(t), body = deferred();
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve({ ok: true, json: () => body.promise });
-  await flush();
-  f.setHidden(true);
-  f.controller.pause();
-  assert.equal(await refreshing, false);
-  body.resolve(snapshot(NOW));
-  f.requests[1].resolve(response(snapshot(NOW + 1_000)));
-  await flush();
-  assert.equal(f.views.length, 0);
-});
-
-test('a hidden document does not paint a timeout failure even before its visibility handler runs', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.setHidden(true);
-  await f.advance(6_000);
-  assert.equal(await refreshing, false);
-  assert.equal(f.views.length, 0);
-  assert.equal(f.timers.size, 0);
-});
-
-test('pause or destroy after the first paint cannot allow a pending source to upgrade it', async (t) => {
-  for (const action of ['pause', 'destroy']) {
-    const f = fixture(t);
-    const refreshing = f.controller.refresh();
-    await flush();
-    f.requests[0].resolve(response(snapshot(NOW - 1_000)));
-    await flush();
-    assert.equal(f.views.length, 1);
-    f.controller[action]();
-    assert.equal(await refreshing, false);
-    f.requests[1].resolve(response(snapshot(NOW, 'outage')));
-    await flush();
-    assert.equal(f.views.length, 1);
-    assert.equal(f.views[0].updatedAt, stamp(NOW - 1_000));
-    assert.equal(f.timers.size, 0);
-  }
-});
-
-test('resuming a paused request starts a fresh cycle without letting the old cycle advance it', async (t) => {
-  const f = fixture(t);
-  const firstRefresh = f.controller.refresh();
-  await flush();
+    assert.equal(f.views.length,0);
+    assert.equal(f.timers.size,0);
+  });
+}
+test('resume isolates pending and subsequent request cycles',async(t)=>{
+  const f=fixture(t);
+  const p=f.controller.refresh();
   f.controller.pause();
   f.controller.resume();
-  assert.equal(await firstRefresh, false);
+  assert.equal(await p,false);
   await flush();
-  assert.equal(f.requests.length, 4);
-  f.requests[2].resolve(response(snapshot(NOW - 1_000)));
+  assert.equal(f.requests.length,2);
+  f.requests[1].resolve(response(snapshot(NOW)));
   await flush();
-  assert.equal(f.views.at(-1).updatedAt, stamp(NOW - 1_000));
-  const visibleCount = f.views.length;
-  f.requests[0].resolve(response(snapshot(NOW, 'outage')));
-  f.requests[1].resolve(response(snapshot(NOW + 1_000, 'outage')));
+  f.requests[0].resolve(response(snapshot(NOW+1000,'outage')));
   await flush();
-  assert.equal(f.views.length, visibleCount);
-  f.requests[3].resolve(response(snapshot(NOW)));
-  await flush();
-  assert.equal(f.views.at(-1).updatedAt, stamp(NOW));
-  assert.equal(f.views.at(-1).overall, 'operational');
+  assert.equal(f.views.at(-1).updatedAt,stamp(NOW));
+  assert.equal(f.views.at(-1).overall,'operational');
 });
-
-test('stale snapshots render promptly but retain the existing unknown semantics', async (t) => {
-  const f = fixture(t);
-  const refreshing = f.controller.refresh();
-  await flush();
-  f.requests[0].resolve(response(snapshot(NOW - 2_700_001)));
-  await flush();
-  assert.equal(f.views.length, 1);
-  assert.equal(f.views[0].overall, 'unknown');
-  assert.match(f.views[0].description, /not current/);
-  assert.equal(f.feedback.at(-1), 'Waiting for a current observation.');
-  f.requests[1].reject(new Error('Unavailable'));
-  assert.equal(await refreshing, true);
-});
-
-test('source allowlists and request privacy options remain unchanged', async (t) => {
-  const f = fixture(t, ['./status.json', './status.json', FALLBACK_URL, SCHEDULED_URL, 'https://private.invalid/probe', '/api/status']);
-  const refreshing = f.controller.refresh();
-  await flush();
-  assert.deepEqual(f.requests.map((request) => request.url), ['./status.json', FALLBACK_URL, SCHEDULED_URL]);
-  for (const request of f.requests) {
-    assert.equal(request.options.cache, 'no-store');
-    assert.equal(request.options.credentials, 'omit');
-    assert.equal(request.options.redirect, 'error');
-    request.resolve(response(snapshot()));
-  }
-  assert.equal(await refreshing, true);
-  const configuredDocument = (content) => ({ querySelector: () => ({ content }) });
-  assert.deepEqual(resolveStatusDataUrls(configuredDocument(FALLBACK_URL)), [FALLBACK_URL, SCHEDULED_URL]);
-  assert.deepEqual(resolveStatusDataUrls(configuredDocument('https://private.invalid/probe')), ['./status.json', SCHEDULED_URL]);
+test('restricts sources to known URLs and launches no backup for a fresh result',async(t)=>{
+  const f=fixture(t, ['https://invalid.example/', './status.json', SCHEDULED_URL,SCHEDULED_URL]);
+  const p=f.controller.refresh();
+  f.requests[0].resolve(response(snapshot()));
+  assert.equal(await p,true);
+  assert.deepEqual(f.requests.map(r=>r.url),[SCHEDULED_URL]);
+  assert.deepEqual(resolveStatusDataUrls({querySelector:()=>({content:FALLBACK_URL})}),[FALLBACK_URL,SCHEDULED_URL]);
 });
